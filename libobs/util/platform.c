@@ -602,6 +602,9 @@ int os_dtostr(double value, char *dst, size_t size)
 
 static int recursive_mkdir(char *path)
 {
+	if (path == NULL)
+		return MKDIR_ERROR;
+	
 	char *last_slash;
 	int ret;
 
