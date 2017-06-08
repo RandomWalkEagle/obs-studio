@@ -102,13 +102,13 @@ static bool GetProfileName(QWidget *parent, std::string &name,
 			return false;
 		}
 		if (name.empty()) {
-			QMessageBox::information(parent,
+			OBSMessageBox::information(parent,
 					QTStr("NoNameEntered.Title"),
 					QTStr("NoNameEntered.Text"));
 			continue;
 		}
 		if (ProfileExists(name.c_str())) {
-			QMessageBox::information(parent,
+			OBSMessageBox::information(parent,
 					QTStr("NameExists.Title"),
 					QTStr("NameExists.Text"));
 			continue;
@@ -407,7 +407,7 @@ void OBSBasic::on_actionRemoveProfile_triggered()
 	QString text = QTStr("ConfirmRemove.Text");
 	text.replace("$1", QT_UTF8(oldName.c_str()));
 
-	QMessageBox::StandardButton button = QMessageBox::question(this,
+	QMessageBox::StandardButton button = OBSMessageBox::question(this,
 			QTStr("ConfirmRemove.Title"), text);
 	if (button == QMessageBox::No)
 		return;
@@ -481,9 +481,13 @@ void OBSBasic::on_actionImportProfile_triggered()
 					profileDir + "/basic.ini");
 			QFile::copy(dir + "/service.json",
 					profileDir + "/service.json");
+			QFile::copy(dir + "/streamEncoder.json",
+					profileDir + "/streamEncoder.json");
+			QFile::copy(dir + "/recordEncoder.json",
+					profileDir + "/recordEncoder.json");
 			RefreshProfiles();
 		} else {
-			QMessageBox::information(this,
+			OBSMessageBox::information(this,
 					QTStr("Basic.MainMenu.Profile.Import"),
 					QTStr("Basic.MainMenu.Profile.Exists"));
 		}
@@ -524,6 +528,10 @@ void OBSBasic::on_actionExportProfile_triggered()
 					outputDir + "/basic.ini");
 			QFile::copy(inputPath + currentProfile + "/service.json",
 					outputDir + "/service.json");
+			QFile::copy(inputPath + currentProfile + "/streamEncoder.json",
+					outputDir + "/streamEncoder.json");
+			QFile::copy(inputPath + currentProfile + "/recordEncoder.json",
+					outputDir + "/recordEncoder.json");
 		}
 	}
 }

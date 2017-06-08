@@ -1,6 +1,7 @@
 #include <string>
 #include <algorithm>
 #include <QMessageBox>
+#include "qt-wrappers.hpp"
 #include "audio-encoders.hpp"
 #include "window-basic-main.hpp"
 #include "window-basic-main-outputs.hpp"
@@ -47,11 +48,14 @@ static void OBSStopStreaming(void *data, calldata_t *params)
 {
 	BasicOutputHandler *output = static_cast<BasicOutputHandler*>(data);
 	int code = (int)calldata_int(params, "code");
+	const char *last_error = calldata_string(params, "last_error");
+
+	QString arg_last_error = QString::fromUtf8(last_error);
 
 	output->streamingActive = false;
 	output->delayActive = false;
 	QMetaObject::invokeMethod(output->main,
-			"StreamingStop", Q_ARG(int, code));
+			"StreamingStop", Q_ARG(int, code), Q_ARG(QString, arg_last_error));
 }
 
 static void OBSStartRecording(void *data, calldata_t *params)
@@ -565,19 +569,21 @@ void SimpleOutput::UpdateStreamingSettings_amd(obs_data_t *settings,
 		int bitrate)
 {
 	// Static Properties
-	obs_data_set_int(settings, "AMF.H264.Usage", 0);
-	obs_data_set_int(settings, "AMF.H264.Profile", 100); // High
+	obs_data_set_int(settings, "Usage", 0);
+	obs_data_set_int(settings, "Profile", 100); // High
 	obs_data_set_string(settings, "profile", "high"); // High
 	
 	// Rate Control Properties
-	obs_data_set_int(settings, "AMF.H264.RateControlMethod", 1);
+	obs_data_set_int(settings, "RateControlMethod", 1);
 	obs_data_set_string(settings, "rate_control", "CBR");
-	obs_data_set_int(settings, "AMF.H264.Bitrate.Target", bitrate);
+	obs_data_set_int(settings, "Bitrate.Target", bitrate);
 	obs_data_set_int(settings, "bitrate", bitrate);
-	obs_data_set_int(settings, "AMF.H264.FillerData", 1);
+	obs_data_set_int(settings, "FillerData", 1);
+	obs_data_set_int(settings, "VBVBuffer", 1);
+	obs_data_set_int(settings, "VBVBuffer.Size", bitrate);
 	
 	// Picture Control Properties
-	obs_data_set_double(settings, "AMF.H264.KeyframeInterval", 2.0);
+	obs_data_set_double(settings, "KeyframeInterval", 2.0);
 	obs_data_set_int(settings, "keyint_sec", 2);
 }
 
@@ -586,19 +592,21 @@ void SimpleOutput::UpdateRecordingSettings_amd_cqp(int cqp)
 	obs_data_t *settings = obs_data_create();
 
 	// Static Properties
-	obs_data_set_int(settings, "AMF.H264.Usage", 0);
-	obs_data_set_int(settings, "AMF.H264.Profile", 100); // High
+	obs_data_set_int(settings, "Usage", 0);
+	obs_data_set_int(settings, "Profile", 100); // High
 	obs_data_set_string(settings, "profile", "high"); // High
 
 	// Rate Control Properties
-	obs_data_set_int(settings, "AMF.H264.RateControlMethod", 0);
+	obs_data_set_int(settings, "RateControlMethod", 0);
 	obs_data_set_string(settings, "rate_control", "CQP");
-	obs_data_set_int(settings, "AMF.H264.QP.IFrame", cqp);
-	obs_data_set_int(settings, "AMF.H264.QP.PFrame", cqp);
-	obs_data_set_int(settings, "AMF.H264.QP.BFrame", cqp);
+	obs_data_set_int(settings, "QP.IFrame", cqp);
+	obs_data_set_int(settings, "QP.PFrame", cqp);
+	obs_data_set_int(settings, "QP.BFrame", cqp);
+	obs_data_set_int(settings, "VBVBuffer", 1);
+	obs_data_set_int(settings, "VBVBuffer.Size", 100000);
 
 	// Picture Control Properties
-	obs_data_set_double(settings, "AMF.H264.KeyframeInterval", 2.0);
+	obs_data_set_double(settings, "KeyframeInterval", 2.0);
 	obs_data_set_int(settings, "keyint_sec", 2);
 
 	// Update and release
@@ -665,9 +673,17 @@ bool SimpleOutput::StartStreaming(obs_service_t *service)
 			"DelayPreserve");
 	const char *bindIP = config_get_string(main->Config(), "Output",
 			"BindIP");
+	bool enableNewSocketLoop = config_get_bool(main->Config(), "Output",
+			"NewSocketLoopEnable");
+	bool enableLowLatencyMode = config_get_bool(main->Config(), "Output",
+			"LowLatencyEnable");
 
 	obs_data_t *settings = obs_data_create();
 	obs_data_set_string(settings, "bind_ip", bindIP);
+	obs_data_set_bool(settings, "new_socket_loop_enabled",
+			enableNewSocketLoop);
+	obs_data_set_bool(settings, "low_latency_mode_enabled",
+			enableLowLatencyMode);
 	obs_output_update(streamOutput, settings);
 	obs_data_release(settings);
 
@@ -766,7 +782,7 @@ bool SimpleOutput::ConfigureRecording(bool updateReplayBuffer)
 
 	if (!dir) {
 		if (main->isVisible())
-			QMessageBox::information(main,
+			OBSMessageBox::information(main,
 					QTStr("Output.BadPath.Title"),
 					QTStr("Output.BadPath.Text"));
 		else
@@ -837,8 +853,13 @@ bool SimpleOutput::StartRecording()
 	UpdateRecording();
 	if (!ConfigureRecording(false))
 		return false;
-	if (!obs_output_start(fileOutput))
+	if (!obs_output_start(fileOutput))  {
+		QMessageBox::critical(main,
+				QTStr("Output.StartRecordingFailed"),
+				QTStr("Output.StartFailedGeneric"));
 		return false;
+	}
+
 	return true;
 }
 
@@ -847,8 +868,13 @@ bool SimpleOutput::StartReplayBuffer()
 	UpdateRecording();
 	if (!ConfigureRecording(true))
 		return false;
-	if (!obs_output_start(replayBuffer))
+	if (!obs_output_start(replayBuffer)) {
+		QMessageBox::critical(main,
+				QTStr("Output.StartReplayFailed"),
+				QTStr("Output.StartFailedGeneric"));
 		return false;
+	}
+
 	return true;
 }
 
@@ -1152,6 +1178,8 @@ inline void AdvancedOutput::SetupFFmpeg()
 	const char *url = config_get_string(main->Config(), "AdvOut", "FFURL");
 	int vBitrate = config_get_int(main->Config(), "AdvOut",
 			"FFVBitrate");
+	int gopSize = config_get_int(main->Config(), "AdvOut",
+			"FFVGOPSize");
 	bool rescale = config_get_bool(main->Config(), "AdvOut",
 			"FFRescale");
 	const char *rescaleRes = config_get_string(main->Config(), "AdvOut",
@@ -1184,6 +1212,7 @@ inline void AdvancedOutput::SetupFFmpeg()
 	obs_data_set_string(settings, "format_name", formatName);
 	obs_data_set_string(settings, "format_mime_type", mimeType);
 	obs_data_set_string(settings, "muxer_settings", muxCustom);
+	obs_data_set_int(settings, "gop_size", gopSize);
 	obs_data_set_int(settings, "video_bitrate", vBitrate);
 	obs_data_set_string(settings, "video_encoder", vEncoder);
 	obs_data_set_int(settings, "video_encoder_id", vEncoderId);
@@ -1304,9 +1333,17 @@ bool AdvancedOutput::StartStreaming(obs_service_t *service)
 			"DelayPreserve");
 	const char *bindIP = config_get_string(main->Config(), "Output",
 			"BindIP");
+	bool enableNewSocketLoop = config_get_bool(main->Config(), "Output",
+			"NewSocketLoopEnable");
+	bool enableLowLatencyMode = config_get_bool(main->Config(), "Output",
+			"LowLatencyEnable");
 
 	obs_data_t *settings = obs_data_create();
 	obs_data_set_string(settings, "bind_ip", bindIP);
+	obs_data_set_bool(settings, "new_socket_loop_enabled",
+			enableNewSocketLoop);
+	obs_data_set_bool(settings, "low_latency_mode_enabled",
+			enableLowLatencyMode);
 	obs_output_update(streamOutput, settings);
 	obs_data_release(settings);
 
@@ -1365,7 +1402,7 @@ bool AdvancedOutput::StartRecording()
 
 		if (!dir) {
 			if (main->isVisible())
-				QMessageBox::information(main,
+				OBSMessageBox::information(main,
 						QTStr("Output.BadPath.Title"),
 						QTStr("Output.BadPath.Text"));
 			else
@@ -1399,11 +1436,14 @@ bool AdvancedOutput::StartRecording()
 		obs_data_release(settings);
 	}
 
-	if (obs_output_start(fileOutput)) {
-		return true;
+	if (!obs_output_start(fileOutput)) {
+		QMessageBox::critical(main,
+				QTStr("Output.StartRecordingFailed"),
+				QTStr("Output.StartFailedGeneric"));
+		return false;
 	}
 
-	return false;
+	return true;
 }
 
 void AdvancedOutput::StopStreaming(bool force)

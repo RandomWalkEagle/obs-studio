@@ -87,13 +87,13 @@ struct game_capture_config {
 	enum capture_mode             mode;
 	uint32_t                      scale_cx;
 	uint32_t                      scale_cy;
-	bool                          cursor : 1;
-	bool                          force_shmem : 1;
-	bool                          force_scaling : 1;
-	bool                          allow_transparency : 1;
-	bool                          limit_framerate : 1;
-	bool                          capture_overlays : 1;
-	bool                          anticheat_hook : 1;
+	bool                          cursor;
+	bool                          force_shmem;
+	bool                          force_scaling;
+	bool                          allow_transparency;
+	bool                          limit_framerate;
+	bool                          capture_overlays;
+	bool                          anticheat_hook;
 };
 
 struct game_capture {
@@ -119,25 +119,25 @@ struct game_capture {
 	volatile long                 hotkey_window;
 	volatile bool                 deactivate_hook;
 	volatile bool                 activate_hook_now;
-	bool                          wait_for_target_startup : 1;
-	bool                          showing : 1;
-	bool                          active : 1;
-	bool                          capturing : 1;
-	bool                          activate_hook : 1;
-	bool                          process_is_64bit : 1;
-	bool                          error_acquiring : 1;
-	bool                          dwm_capture : 1;
-	bool                          initial_config : 1;
-	bool                          convert_16bit : 1;
-	bool                          is_app : 1;
+	bool                          wait_for_target_startup;
+	bool                          showing;
+	bool                          active;
+	bool                          capturing;
+	bool                          activate_hook;
+	bool                          process_is_64bit;
+	bool                          error_acquiring;
+	bool                          dwm_capture;
+	bool                          initial_config;
+	bool                          convert_16bit;
+	bool                          is_app;
+	bool                          cursor_hidden;
 
 	struct game_capture_config    config;
 
 	ipc_pipe_server_t             pipe;
 	gs_texture_t                  *texture;
 	struct hook_info              *global_hook_info;
-	HANDLE                        keepalive_thread;
-	DWORD                         keepalive_thread_id;
+	HANDLE                        keepalive_mutex;
 	HANDLE                        hook_init;
 	HANDLE                        hook_restart;
 	HANDLE                        hook_stop;
@@ -149,6 +149,7 @@ struct game_capture {
 	HANDLE                        texture_mutexes[2];
 	wchar_t                       *app_sid;
 	int                           retrying;
+	float                         cursor_check_time;
 
 	union {
 		struct {
@@ -281,12 +282,6 @@ static void stop_capture(struct game_capture *gc)
 		gc->data = NULL;
 	}
 
-	if (gc->keepalive_thread) {
-		PostThreadMessage(gc->keepalive_thread_id, WM_QUIT, 0, 0);
-		WaitForSingleObject(gc->keepalive_thread, 300);
-		close_handle(&gc->keepalive_thread);
-	}
-
 	if (gc->app_sid) {
 		LocalFree(gc->app_sid);
 		gc->app_sid = NULL;
@@ -298,6 +293,7 @@ static void stop_capture(struct game_capture *gc)
 	close_handle(&gc->hook_exit);
 	close_handle(&gc->hook_init);
 	close_handle(&gc->hook_data_map);
+	close_handle(&gc->keepalive_mutex);
 	close_handle(&gc->global_hook_info_map);
 	close_handle(&gc->target_process);
 	close_handle(&gc->texture_mutexes[0]);
@@ -626,7 +622,7 @@ static inline bool is_64bit_process(HANDLE process)
 static inline bool open_target_process(struct game_capture *gc)
 {
 	gc->target_process = open_process(
-			PROCESS_QUERY_INFORMATION | PROCESS_VM_READ,
+			PROCESS_QUERY_LIMITED_INFORMATION,
 			false, gc->process_id);
 	if (!gc->target_process) {
 		warn("could not open process: %s  try limited privilege", 
@@ -649,77 +645,17 @@ static inline bool open_target_process(struct game_capture *gc)
 	return true;
 }
 
-struct keepalive_data {
-	struct game_capture *gc;
-	HANDLE initialized;
-};
-
-#define DEF_FLAGS (WS_POPUP | WS_CLIPCHILDREN | WS_CLIPSIBLINGS)
-
-static DWORD WINAPI keepalive_window_thread(struct keepalive_data *data)
-{
-	HANDLE initialized = data->initialized;
-	struct game_capture *gc = data->gc;
-	wchar_t new_name[64];
-	WNDCLASSW wc;
-	HWND window;
-	MSG msg;
-
-	_snwprintf(new_name, sizeof(new_name), L"%s%lu",
-			WINDOW_HOOK_KEEPALIVE, gc->process_id);
-
-	memset(&wc, 0, sizeof(wc));
-	wc.style = CS_OWNDC;
-	wc.hInstance = GetModuleHandleW(NULL);
-	wc.lpfnWndProc = (WNDPROC)DefWindowProc;
-	wc.lpszClassName = new_name;
-
-	if (!RegisterClass(&wc)) {
-		warn("Failed to create keepalive window class: %lu",
-				GetLastError());
-		return 0;
-	}
-
-	window = CreateWindowExW(0, new_name, NULL, DEF_FLAGS, 0, 0, 1, 1,
-			NULL, NULL, wc.hInstance, NULL);
-	if (!window) {
-		warn("Failed to create keepalive window: %lu",
-				GetLastError());
-		return 0;
-	}
-
-	SetEvent(initialized);
-
-	while (GetMessage(&msg, NULL, 0, 0)) {
-		TranslateMessage(&msg);
-		DispatchMessage(&msg);
-	}
-
-	DestroyWindow(window);
-	UnregisterClassW(new_name, wc.hInstance);
-
-	return 0;
-}
-
 static inline bool init_keepalive(struct game_capture *gc)
 {
-	struct keepalive_data data;
-	HANDLE initialized = CreateEvent(NULL, false, false, NULL);
+	wchar_t new_name[64];
+	_snwprintf(new_name, 64, L"%s%lu", WINDOW_HOOK_KEEPALIVE,
+			gc->process_id);
 
-	data.gc = gc;
-	data.initialized = initialized;
-
-	gc->keepalive_thread = CreateThread(NULL, 0,
-			(LPTHREAD_START_ROUTINE)keepalive_window_thread,
-			&data, 0, &gc->keepalive_thread_id);
-	if (!gc->keepalive_thread) {
-		warn("Failed to create keepalive window thread: %lu",
-				GetLastError());
+	gc->keepalive_mutex = CreateMutexW(NULL, false, new_name);
+	if (!gc->keepalive_mutex) {
+		warn("Failed to create keepalive mutex: %lu", GetLastError());
 		return false;
 	}
-
-	WaitForSingleObject(initialized, INFINITE);
-	CloseHandle(initialized);
 
 	return true;
 }
@@ -802,18 +738,17 @@ static inline bool init_hook_info(struct game_capture *gc)
 	gc->global_hook_info->capture_overlay = gc->config.capture_overlays;
 	gc->global_hook_info->force_shmem = gc->config.force_shmem;
 	gc->global_hook_info->use_scale = gc->config.force_scaling;
-	gc->global_hook_info->cx = gc->config.scale_cx;
-	gc->global_hook_info->cy = gc->config.scale_cy;
+	if (gc->config.scale_cx)
+		gc->global_hook_info->cx = gc->config.scale_cx;
+	if (gc->config.scale_cy)
+		gc->global_hook_info->cy = gc->config.scale_cy;
 	reset_frame_interval(gc);
 
 	obs_enter_graphics();
-	if (!gs_shared_texture_available())
+	if (!gs_shared_texture_available()) {
+		warn("init_hook_info: shared texture capture unavailable");
 		gc->global_hook_info->force_shmem = true;
-	obs_leave_graphics();
-
-	obs_enter_graphics();
-	if (!gs_shared_texture_available())
-		gc->global_hook_info->force_shmem = true;
+	}
 	obs_leave_graphics();
 
 	return true;
@@ -983,6 +918,8 @@ static const char *blacklisted_exes[] = {
 	"origin",
 	"devenv",
 	"taskmgr",
+	"chrome",
+	"firefox",
 	"systemsettings",
 	"applicationframehost",
 	"cmd",
@@ -1084,7 +1021,7 @@ static void setup_window(struct game_capture *gc, HWND window)
 
 	GetWindowThreadProcessId(window, &gc->process_id);
 	if (gc->process_id) {
-		process = open_process(PROCESS_QUERY_INFORMATION,
+		process = open_process(PROCESS_QUERY_LIMITED_INFORMATION,
 			false, gc->process_id);
 		if (process) {
 			gc->is_app = is_app(process);
@@ -1620,6 +1557,22 @@ static inline bool capture_valid(struct game_capture *gc)
 	return !object_signalled(gc->target_process);
 }
 
+static void check_foreground_window(struct game_capture *gc, float seconds)
+{
+	// Hides the cursor if the user isn't actively in the game
+	gc->cursor_check_time += seconds;
+	if (gc->cursor_check_time >= 0.1f) {
+		DWORD foreground_process_id;
+		GetWindowThreadProcessId(GetForegroundWindow(),
+			&foreground_process_id);
+		if (gc->process_id != foreground_process_id)
+			gc->cursor_hidden = true;
+		else
+			gc->cursor_hidden = false;
+		gc->cursor_check_time = 0.0f;
+	}
+}
+
 static void game_capture_tick(void *data, float seconds)
 {
 	struct game_capture *gc = data;
@@ -1726,6 +1679,7 @@ static void game_capture_tick(void *data, float seconds)
 			}
 
 			if (gc->config.cursor) {
+				check_foreground_window(gc, seconds);
 				obs_enter_graphics();
 				cursor_capture(&gc->cursor_data);
 				obs_leave_graphics();
@@ -1781,12 +1735,14 @@ static void game_capture_render(void *data, gs_effect_t *effect)
 		obs_source_draw(gc->texture, 0, 0, 0, 0,
 				gc->global_hook_info->flip);
 
-		if (gc->config.allow_transparency && gc->config.cursor) {
+		if (gc->config.allow_transparency && gc->config.cursor &&
+			!gc->cursor_hidden) {
 			game_capture_render_cursor(gc);
 		}
 	}
 
-	if (!gc->config.allow_transparency && gc->config.cursor) {
+	if (!gc->config.allow_transparency && gc->config.cursor &&
+		!gc->cursor_hidden) {
 		effect = obs_get_base_effect(OBS_EFFECT_DEFAULT);
 
 		while (gs_effect_loop(effect, "Draw")) {

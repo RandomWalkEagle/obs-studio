@@ -38,9 +38,11 @@
 
 #include <QPointer>
 
+class QMessageBox;
 class QListWidgetItem;
 class VolControl;
 class QNetworkReply;
+class OBSBasicStats;
 
 #include "ui_OBSBasic.h"
 
@@ -110,10 +112,17 @@ private:
 
 	std::vector<OBSSignal> signalHandlers;
 
+	std::vector<std::string> projectorArray;
+	std::vector<int> previewProjectorArray;
+
 	bool loaded = false;
 	long disableSaving = 1;
 	bool projectChanged = false;
 	bool previewEnabled = true;
+
+	const char *copyString;
+	const char *copyFiltersString;
+	bool copyVisible = true;
 
 	QPointer<QThread> updateCheckThread;
 	QPointer<QThread> logUploadThread;
@@ -150,6 +159,9 @@ private:
 	ConfigFile    basicConfig;
 
 	QPointer<QWidget> projectors[10];
+	QList<QPointer<QWidget>> windowProjectors;
+
+	QPointer<QWidget> stats;
 
 	QPointer<QMenu> startStreamMenu;
 
@@ -162,7 +174,6 @@ private:
 	QPointer<QAction>         showHide;
 	QPointer<QAction>         exit;
 	QPointer<QMenu>           trayMenu;
-	bool          disableHiding = false;
 
 	void          DrawBackdrop(float cx, float cy);
 
@@ -197,7 +208,7 @@ private:
 	bool          QueryRemoveSource(obs_source_t *source);
 
 	void          TimedCheckForUpdates();
-	void          CheckForUpdates();
+	void          CheckForUpdates(bool manualUpdate);
 
 	void GetFPSCommon(uint32_t &num, uint32_t &den) const;
 	void GetFPSInteger(uint32_t &num, uint32_t &den) const;
@@ -226,7 +237,8 @@ private:
 	void ClearSceneData();
 
 	void Nudge(int dist, MoveDir dir);
-	void OpenProjector(obs_source_t *source, int monitor);
+	void OpenProjector(obs_source_t *source, int monitor, bool window,
+			QString title = nullptr);
 
 	void GetAudioSourceFilters();
 	void GetAudioSourceProperties();
@@ -270,6 +282,7 @@ private:
 	void RemoveQuickTransitionHotkey(QuickTransition *qt);
 	void LoadQuickTransitions(obs_data_array_t *array);
 	obs_data_array_t *SaveQuickTransitions();
+	void ClearQuickTransitionWidgets();
 	void RefreshQuickTransitions();
 	void CreateDefaultQuickTransitions();
 
@@ -305,6 +318,8 @@ private:
 	int   programCX = 0, programCY = 0;
 	float programScale = 0.0f;
 
+	int disableOutputsRef = 0;
+
 	inline bool IsPreviewProgramMode() const
 	{
 		return os_atomic_load_bool(&previewProgramMode);
@@ -321,6 +336,23 @@ private:
 
 	void ReplayBufferClicked();
 
+	bool sysTrayMinimizeToTray();
+
+	void EnumDialogs();
+
+	QList<QDialog*> visDialogs;
+	QList<QDialog*> modalDialogs;
+	QList<QMessageBox*> visMsgBoxes;
+
+	QList<QPoint> visDlgPositions;
+
+	obs_data_array_t *SaveProjectors();
+	void LoadSavedProjectors(obs_data_array_t *savedProjectors);
+
+	obs_data_array_t *SavePreviewProjectors();
+	void LoadSavedPreviewProjectors(
+		obs_data_array_t *savedPreviewProjectors);
+
 public slots:
 	void StartStreaming();
 	void StopStreaming();
@@ -331,7 +363,7 @@ public slots:
 
 	void StreamingStart();
 	void StreamStopping();
-	void StreamingStop(int errorcode);
+	void StreamingStop(int errorcode, QString last_error);
 
 	void StartRecording();
 	void StopRecording();
@@ -391,15 +423,14 @@ private slots:
 	void IconActivated(QSystemTrayIcon::ActivationReason reason);
 	void SetShowing(bool showing);
 
-	inline void ToggleShowHide()
-	{
-		bool showing = isVisible();
-		if (disableHiding && showing)
-			return;
-		if (showing)
-			CloseDialogs();
-		SetShowing(!showing);
-	}
+	void ToggleShowHide();
+
+	void on_actionCopySource_triggered();
+	void on_actionPasteRef_triggered();
+	void on_actionPasteDup_triggered();
+
+	void on_actionCopyFilters_triggered();
+	void on_actionPasteFilters_triggered();
 
 private:
 	/* OBS Callbacks */
@@ -468,6 +499,16 @@ public:
 	void SaveService();
 	bool LoadService();
 
+	inline void EnableOutputs(bool enable)
+	{
+		if (enable) {
+			if (--disableOutputsRef < 0)
+				disableOutputsRef = 0;
+		} else {
+			disableOutputsRef++;
+		}
+	}
+
 	void ReorderSceneItem(obs_sceneitem_t *item, size_t idx);
 
 	QMenu *AddDeinterlacingMenu(obs_source_t *source);
@@ -479,6 +520,9 @@ public:
 
 	void SystemTrayInit();
 	void SystemTray(bool firstStarted);
+
+	void OpenSavedProjectors();
+	void RemoveSavedProjectors(int monitor);
 
 protected:
 	virtual void closeEvent(QCloseEvent *event) override;
@@ -578,9 +622,12 @@ private slots:
 
 	void on_modeSwitch_clicked();
 
+	void on_autoConfigure_triggered();
+	void on_stats_triggered();
+
 	void logUploadFinished(const QString &text, const QString &error);
 
-	void updateFileFinished(const QString &text, const QString &error);
+	void updateCheckFinished();
 
 	void AddSourceFromAction();
 
@@ -609,6 +656,10 @@ private slots:
 	void OpenPreviewProjector();
 	void OpenSourceProjector();
 	void OpenSceneProjector();
+
+	void OpenPreviewWindow();
+	void OpenSourceWindow();
+	void OpenSceneWindow();
 
 public slots:
 	void on_actionResetTransform_triggered();

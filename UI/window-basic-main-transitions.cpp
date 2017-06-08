@@ -234,8 +234,10 @@ void OBSBasic::TransitionStopped()
 			SetCurrentScene(scene);
 	}
 
-	if (api)
+	if (api) {
 		api->on_event(OBS_FRONTEND_EVENT_TRANSITION_STOPPED);
+		api->on_event(OBS_FRONTEND_EVENT_SCENE_CHANGED);
+	}
 
 	swapScene = nullptr;
 }
@@ -274,19 +276,19 @@ void OBSBasic::TransitionToScene(OBSSource source, bool force)
 
 	obs_source_t *transition = obs_get_output_source(0);
 
-	if (force)
+	if (force) {
 		obs_transition_set(transition, source);
-	else
+		if (api)
+			api->on_event(OBS_FRONTEND_EVENT_SCENE_CHANGED);
+	} else {
 		obs_transition_start(transition, OBS_TRANSITION_MODE_AUTO,
 				ui->transitionDuration->value(), source);
+	}
 
 	if (usingPreviewProgram && sceneDuplicationMode)
 		obs_scene_release(scene);
 
 	obs_source_release(transition);
-
-	if (api)
-		api->on_event(OBS_FRONTEND_EVENT_SCENE_CHANGED);
 }
 
 static inline void SetComboTransition(QComboBox *combo, obs_source_t *tr)
@@ -362,7 +364,7 @@ void OBSBasic::AddTransition()
 
 	if (accepted) {
 		if (name.empty()) {
-			QMessageBox::information(this,
+			OBSMessageBox::information(this,
 					QTStr("NoNameEntered.Title"),
 					QTStr("NoNameEntered.Text"));
 			AddTransition();
@@ -371,7 +373,7 @@ void OBSBasic::AddTransition()
 
 		source = FindTransition(name.c_str());
 		if (source) {
-			QMessageBox::information(this,
+			OBSMessageBox::information(this,
 					QTStr("NameExists.Title"),
 					QTStr("NameExists.Text"));
 
@@ -390,6 +392,9 @@ void OBSBasic::AddTransition()
 
 		if (api)
 			api->on_event(OBS_FRONTEND_EVENT_TRANSITION_LIST_CHANGED);
+
+		ClearQuickTransitionWidgets();
+		RefreshQuickTransitions();
 	}
 }
 
@@ -443,6 +448,9 @@ void OBSBasic::on_transitionRemove_clicked()
 
 	if (api)
 		api->on_event(OBS_FRONTEND_EVENT_TRANSITION_LIST_CHANGED);
+
+	ClearQuickTransitionWidgets();
+	RefreshQuickTransitions();
 }
 
 void OBSBasic::RenameTransition()
@@ -462,7 +470,7 @@ void OBSBasic::RenameTransition()
 
 	if (accepted) {
 		if (name.empty()) {
-			QMessageBox::information(this,
+			OBSMessageBox::information(this,
 					QTStr("NoNameEntered.Title"),
 					QTStr("NoNameEntered.Text"));
 			RenameTransition();
@@ -471,7 +479,7 @@ void OBSBasic::RenameTransition()
 
 		source = FindTransition(name.c_str());
 		if (source) {
-			QMessageBox::information(this,
+			OBSMessageBox::information(this,
 					QTStr("NameExists.Title"),
 					QTStr("NameExists.Text"));
 
@@ -481,8 +489,11 @@ void OBSBasic::RenameTransition()
 
 		obs_source_set_name(transition, name.c_str());
 		int idx = ui->transitions->findData(variant);
-		if (idx != -1)
+		if (idx != -1) {
 			ui->transitions->setItemText(idx, QT_UTF8(name.c_str()));
+			ClearQuickTransitionWidgets();
+			RefreshQuickTransitions();
+		}
 	}
 }
 
@@ -915,6 +926,31 @@ void OBSBasic::QuickTransitionRemoveClicked()
 
 	RemoveQuickTransitionHotkey(&qt);
 	quickTransitions.erase(quickTransitions.begin() + idx);
+}
+
+void OBSBasic::ClearQuickTransitionWidgets()
+{
+	if (!IsPreviewProgramMode())
+		return;
+
+	QVBoxLayout *programLayout =
+		reinterpret_cast<QVBoxLayout*>(programOptions->layout());
+
+	for (int idx = 0;; idx++) {
+		QLayoutItem *item = programLayout->itemAt(idx);
+		if (!item)
+			break;
+
+		QWidget *widget = item->widget();
+		if (!widget)
+			continue;
+
+		int id = widget->property("id").toInt();
+		if (id != 0) {
+			delete widget;
+			idx--;
+		}
+	}
 }
 
 void OBSBasic::RefreshQuickTransitions()

@@ -2,6 +2,7 @@
 
 #include <obs.hpp>
 #include "qt-display.hpp"
+#include "window-basic-main.hpp"
 
 class QMouseEvent;
 
@@ -17,12 +18,15 @@ private:
 
 	void mousePressEvent(QMouseEvent *event) override;
 
+	int savedMonitor = 0;
+	bool isWindow = false;
+
 private slots:
 	void EscapeTriggered();
 
 public:
-	OBSProjector(QWidget *parent, obs_source_t *source);
+	OBSProjector(QWidget *parent, obs_source_t *source, bool window);
 	~OBSProjector();
 
-	void Init(int monitor);
+	void Init(int monitor, bool window, QString title);
 };
